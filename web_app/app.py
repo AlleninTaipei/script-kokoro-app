@@ -86,6 +86,12 @@ VOICE_CATALOG: Dict[str, dict] = {
     "zm_yunyang":  {"lang": "zh", "gender": "male",   "group": "Mandarin Chinese", "desc": "成熟穩重"},
 }
 
+def round_robin_voice_map(characters: List[str]) -> Dict[str, str]:
+    """在沒有 AI 配音結果時（或 AI 失敗降級時）, 依序輪詢分配聲音。"""
+    pool = list(VOICE_CATALOG.keys())
+    return {c: pool[i % len(pool)] for i, c in enumerate(characters)}
+
+
 # ── 劇本解析 ─────────────────────────────────────────────────────────────────
 
 def _parse_fountain(text: str) -> List[Tuple[str, str]]:
@@ -297,6 +303,27 @@ async def index():
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
+# ── /config ──────────────────────────────────────────────────────────────────
+
+PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "google":    "GOOGLE_API_KEY",
+}
+
+
+def has_llm_api_key(provider: str = "") -> bool:
+    provider = (provider or DEFAULT_PROVIDER).strip().lower()
+    env_name = PROVIDER_KEY_ENV.get(provider)
+    return bool(env_name and os.environ.get(env_name))
+
+
+@app.get("/config")
+async def get_config():
+    """前端載入時查詢：目前 provider 是否已設定 API Key, 用於決定 AI 配音勾選框的預設狀態。"""
+    return {"provider": DEFAULT_PROVIDER, "has_api_key": has_llm_api_key()}
+
+
 # ── LLM 供應商分派 ───────────────────────────────────────────────────────────
 
 def call_llm(prompt: str, provider: str = "") -> str:
@@ -339,6 +366,7 @@ def call_llm(prompt: str, provider: str = "") -> str:
 
 class AnalyzeRequest(BaseModel):
     text: str
+    use_ai: bool = True
 
 
 @app.post("/analyze")
@@ -349,51 +377,75 @@ async def analyze(req: AnalyzeRequest):
 
     characters = list(dict.fromkeys(c for c, _ in lines))
 
-    # 每個角色取最多 2 句範例
-    samples: Dict[str, List[str]] = {}
-    for char, text in lines:
-        if char not in samples:
-            samples[char] = []
-        if len(samples[char]) < 2:
-            samples[char].append(text[:80])
+    ai_used = False
+    ai_error = None
+    voice_map: Dict[str, str] = {}
+    reasons: Dict[str, str] = {}
 
-    sample_block = "\n".join(
-        f"  {c}: {' / '.join(ss)}" for c, ss in samples.items()
-    )
-    voice_block = "\n".join(
-        f"  {vid}: [{info['group']}] {info['gender']} — {info['desc']}"
-        for vid, info in VOICE_CATALOG.items()
-    )
+    if req.use_ai:
+        try:
+            # 每個角色取最多 2 句範例
+            samples: Dict[str, List[str]] = {}
+            for char, text in lines:
+                if char not in samples:
+                    samples[char] = []
+                if len(samples[char]) < 2:
+                    samples[char].append(text[:80])
 
-    prompt = (
-        "你是 TTS 配音導演。根據角色台詞的語言、性別、年齡、語氣，"
-        "從以下聲音列表中為每個角色選出最合適的聲音。\n\n"
-        f"可用聲音：\n{voice_block}\n\n"
-        f"角色台詞範例：\n{sample_block}\n\n"
-        "回傳純 JSON（不含 markdown），格式如下：\n"
-        '{"mapping": {"角色名": "voice_id"}, "reasons": {"角色名": "一句理由"}}'
-    )
-    raw = call_llm(prompt).strip()
-    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
+            sample_block = "\n".join(
+                f"  {c}: {' / '.join(ss)}" for c, ss in samples.items()
+            )
+            voice_block = "\n".join(
+                f"  {vid}: [{info['group']}] {info['gender']} — {info['desc']}"
+                for vid, info in VOICE_CATALOG.items()
+            )
 
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError:
-        pool = list(VOICE_CATALOG.keys())
-        result = {
-            "mapping": {c: pool[i % len(pool)] for i, c in enumerate(characters)},
-            "reasons": {c: "自動分配" for c in characters},
+            prompt = (
+                "你是 TTS 配音導演。根據角色台詞的語言、性別、年齡、語氣，"
+                "從以下聲音列表中為每個角色選出最合適的聲音。\n\n"
+                f"可用聲音：\n{voice_block}\n\n"
+                f"角色台詞範例：\n{sample_block}\n\n"
+                "回傳純 JSON（不含 markdown），格式如下：\n"
+                '{"mapping": {"角色名": "voice_id"}, "reasons": {"角色名": "一句理由"}}'
+            )
+            raw = call_llm(prompt).strip()
+            raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
+            result = json.loads(raw)
+
+            voice_map = {c: v for c, v in result.get("mapping", {}).items() if v in VOICE_CATALOG}
+            reasons = result.get("reasons", {})
+
+            # 補齊 LLM 漏掉或給出無效 voice_id 的角色
+            missing = [c for c in characters if c not in voice_map]
+            if missing:
+                voice_map.update(round_robin_voice_map(missing))
+                for c in missing:
+                    reasons.setdefault(c, "AI 未提供，自動分配")
+
+            ai_used = True
+        except Exception as e:
+            # 功能降級但不中斷：缺 API Key、額度不足、逾時、格式錯誤等都在此攔截
+            print(f"AI 自動配音失敗（將改用手動輪詢分配）：{e}")
+            ai_error = str(e)
+
+    if not ai_used:
+        voice_map = round_robin_voice_map(characters)
+        reasons = {
+            c: ("自動分配（未使用 AI）" if not req.use_ai else "AI 配音失敗，已自動分配")
+            for c in characters
         }
 
     return {
         "lines":        [{"char": c, "text": t} for c, t in lines],
         "characters":   characters,
-        "voice_map":    result.get("mapping", {}),
-        "reasons":      result.get("reasons", {}),
+        "voice_map":    voice_map,
+        "reasons":      reasons,
         "voice_catalog": {
             vid: f"{info['group']} · {info['gender']} · {info['desc']}"
             for vid, info in VOICE_CATALOG.items()
         },
+        "ai_used":  ai_used,
+        "ai_error": ai_error,
     }
 
 

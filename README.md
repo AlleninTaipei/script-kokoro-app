@@ -40,14 +40,20 @@ Windows 或其他有完整 torch wheel 的平台不需要這個檔案, 直接裝
 
 ### 啟動
 
-```bash
-# 根目錄建立 .env, 填入 Anthropic API Key
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+API Key 為選用設定, 不設定也能完整使用多角色配音(改為手動指定聲音), 詳見下方「功能流程」。若要啟用 AI 自動配音, 複製 `.env.example` 為 `.env`, 依需求填入 Anthropic / OpenAI / Google 三選一的 API Key, 並在 `DEFAULT_PROVIDER` 指定要用哪一家 :
 
-# 啟動 server(mac / linux)
+```bash
+cp .env.example .env
+# 編輯 .env : 設定 DEFAULT_PROVIDER(anthropic / openai / google), 並填入對應的 API Key
+```
+
+啟動 server :
+
+```bash
+# mac / linux
 .venv/bin/python -m uvicorn web_app.app:app --port 8000
 
-# 啟動 server(Windows)
+# Windows
 .venv/Scripts/python.exe -m uvicorn web_app.app:app --port 8000
 ```
 
@@ -56,7 +62,7 @@ echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 ### 功能流程
 
 1. 上傳劇本(.txt, 支援中英文)
-2. LLM 自動配音 : 呼叫 Claude Haiku, 根據台詞語氣, 性別, 語言為每個角色選出最合適的 Kokoro 聲音, 結果可手動調整
+2. 角色配音 : 頁面會自動偵測後端是否已設定 API Key, 決定「使用 AI 自動配音」勾選框的預設狀態。勾選時, 會呼叫 `.env` 中 `DEFAULT_PROVIDER` 指定的雲端 LLM, 根據台詞語氣, 性別, 語言為每個角色選出最合適的 Kokoro 聲音; 取消勾選, 或呼叫 LLM 失敗(例如未設定 API Key), 則會改用輪詢方式先預設分配聲音。兩種情況下, 角色配音表格都可以手動調整
 3. 開始合成 : SSE 串流, 逐句顯示進度, 角色, RTF 數值
 4. 播放與下載 : HTML5 播放器直接試聽, 或下載完整 WAV / MP3(MP3 需系統安裝 `ffmpeg`)
 

@@ -171,14 +171,18 @@ self.vocab   = self.kmodel.vocab
 
 ## Web App 深度剖析
 
-如果說 CLI 腳本是這個專案的骨架, `web_app/app.py` 就是把整套能力包裝成一個真正能給別人用的產品。它是一個 FastAPI 應用, 搭配 SSE(Server Sent Events)做即時進度串流, 並且整合了 Claude Haiku 做 自動配音導演。
+如果說 CLI 腳本是這個專案的骨架, `web_app/app.py` 就是把整套能力包裝成一個真正能給別人用的產品。它是一個 FastAPI 應用, 搭配 SSE(Server Sent Events)做即時進度串流, 並且整合了雲端 LLM(可依 `.env` 的 `DEFAULT_PROVIDER` 切換 Anthropic / OpenAI / Google)做 自動配音導演。這一步完全是選用的, 使用者可以在網頁上取消勾選, 或者根本沒設定任何 API Key, 一樣能跑完整套多角色配音流程, 只是聲音改成依序輪詢分配, 再手動調整。
 
 ### 資料流: 從上傳劇本到下載成品
 
 ```
+瀏覽器載入頁面
+   → GET /config → 回傳目前是否已偵測到 API Key, 決定「使用 AI 自動配音」勾選框的預設狀態
 瀏覽器上傳劇本(.txt)
-   → POST /analyze  → LLM 依語氣挑聲音 → 回傳角色與聲音對照表, 附理由
-   → 使用者可手動調整
+   → POST /analyze(帶 use_ai 旗標)
+        → use_ai=true 且呼叫 LLM 成功 → 依語氣挑聲音 → 回傳角色與聲音對照表, 附理由
+        → use_ai=false, 或呼叫 LLM 失敗(含缺 API Key)→ 優雅降級成輪詢分配, 附上降級原因
+   → 使用者可在角色配音表格手動調整
    → POST /synthesize → SSE 逐句推播進度(RTF, 角色, 目前第幾句)
    → 完成後回傳 session_id
    → GET /download/{session_id}?format=wav 或 mp3 → 下載成品
@@ -186,11 +190,13 @@ self.vocab   = self.kmodel.vocab
 
 還有一個 `GET /preview/{voice_id}` 端點, 讓使用者在動手合成整份劇本之前, 可以先聽一小段示範文字, 判斷這個聲音適不適合, 而且第一次合成後的結果會被快取到 `web_app/tmp/preview_{voice_id}.wav`, 之後同一個聲音就不用重新算一次。
 
-### `/analyze`: 讓 LLM 當配音導演
+### `/analyze`: 讓 LLM 當配音導演(但完全是選用的)
 
-這是整個 Web App 最有意思的一段。它把每個角色的台詞範例, 加上完整的聲音目錄(語言, 性別, 音色描述), 一起丟給 `claude-haiku-4-5-20251001`, 請它扮演 TTS 配音導演, 依照語言, 性別, 年齡, 語氣, 幫每個角色選出最合適的聲音, 並且要求回傳結構化的 JSON, 附上 一句話理由。
+這是整個 Web App 最有意思的一段。它把每個角色的台詞範例, 加上完整的聲音目錄(語言, 性別, 音色描述), 一起丟給雲端 LLM, 請它扮演 TTS 配音導演, 依照語言, 性別, 年齡, 語氣, 幫每個角色選出最合適的聲音, 並且要求回傳結構化的 JSON, 附上 一句話理由。
 
-這裡有兩個值得學的細節:
+呼叫哪一家 LLM 由 `call_llm()` 依 `.env` 裡的 `DEFAULT_PROVIDER`(anthropic / openai / google)分派, 三個分支各自用對應的 SDK 建立 client, 讀取各自的 `XXX_API_KEY`。
+
+這裡有幾個值得學的細節:
 
 第一, prompt 裡明確要求 回傳純 JSON, 不含 markdown, 但程式碼並沒有天真地相信 LLM 一定會乖乖照做, 而是先做一次清理:
 
@@ -200,18 +206,26 @@ raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
 
 LLM 常常會忍不住把 JSON 包在 ```json 這種 markdown 區塊裡, 即使 prompt 已經明講不要, 這行 regex 就是在防這個已知的行為模式。
 
-第二, 如果解析 JSON 失敗(`json.JSONDecodeError`), 系統不會直接讓整個請求失敗, 而是 退回到跟 CLI 版一樣的輪詢式自動分配:
+第二, 也是後來補上的一課: 一開始這段邏輯只用 `except json.JSONDecodeError` 接住 LLM 回傳格式跑掉的情況, 但 `call_llm()` 內部是直接用 `os.environ["ANTHROPIC_API_KEY"]` 這種寫法讀金鑰, 沒設定就會丟 `KeyError`, 而這個例外完全沒被接住, 一路往上炸成 500。這正好是這個專案一開始就想避免, 又不小心留下的坑, 因為使用者可能出於各種理由(例如公司 IT 對雲端服務金鑰有稽核考量)不想設定任何 API Key, 這種情況下多角色配音應該退化成 手動指定, 而不是直接壞掉。
+
+解法是把攔截範圍從單一 `json.JSONDecodeError` 放大成整段 `try/except Exception`, 涵蓋 呼叫 LLM 本身失敗, 缺 Key 的 `KeyError`, 額度不足, 逾時, 回傳格式錯誤 等各種情況, 全部退回跟 CLI 版一樣的輪詢式自動分配:
 
 ```python
-except json.JSONDecodeError:
-    pool = list(VOICE_CATALOG.keys())
-    result = {
-        "mapping": {c: pool[i % len(pool)] for i, c in enumerate(characters)},
-        "reasons": {c: "自動分配" for c in characters},
-    }
+try:
+    raw = call_llm(prompt).strip()
+    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
+    result = json.loads(raw)
+    voice_map = {c: v for c, v in result.get("mapping", {}).items() if v in VOICE_CATALOG}
+    ...
+    ai_used = True
+except Exception as e:
+    print(f"AI 自動配音失敗（將改用手動輪詢分配）：{e}")
+    ai_error = str(e)
 ```
 
-這是一個很好的 優雅降級(graceful degradation)範例: 呼叫外部服務(這裡是 LLM API)永遠有失敗的可能, 好的系統設計不是假設它一定成功, 而是先想好 如果它失敗了, 使用者體驗會退化到哪裡, 而不是直接壞掉。這次實測時, `/analyze` 端點運作得很順利, LLM 給出的聲音對照表跟理由都相當合理, 但這段防呆邏輯代表即使哪天 API 逾時或回傳格式跑掉, 使用者也不會被晾在那裡看錯誤訊息。
+同一段改動也順手加了一個 `use_ai` 旗標, 讓前端可以直接 主動 跳過 LLM, 不用等它失敗才降級, 並且新增了一個很小的 `GET /config` 端點, 只回傳「目前 provider 是否已偵測到 API Key」, 讓網頁一載入就知道要不要把「使用 AI 自動配音」這個勾選框預設打開。回應多了 `ai_used` / `ai_error` 兩個欄位, 前端可以據此在角色配音表格上方顯示一則提示, 讓使用者知道 這次到底有沒有真的用到 AI, 而不是誤以為勾了選項就一定生效。
+
+這是一個很好的 優雅降級(graceful degradation)範例, 也是這個專案第二次用同一個心法解決問題(第一次是 ffmpeg 缺失導致 MP3 轉檔失敗, 見下文): 呼叫外部服務永遠有失敗的可能, 好的系統設計不是假設它一定成功, 而是先想好 如果它失敗了(或使用者根本不想用它), 使用者體驗會退化到哪裡, 而不是直接壞掉或被擋在門外。
 
 ### `/synthesize`: SSE 串流背後的執行緒協作
 
@@ -328,7 +342,7 @@ if len(ps) > 510:
 
 - 如果之後要接上 GPU(CUDA 或 Apple Silicon 的 MPS), RTF 有機會壓到 0.3 倍以下, 但要注意 ONNX Runtime 的 GPU 版本(`onnxruntime-gpu`)跟目前用的 CPU 版本是不同的套件, 需要另外處理安裝與相容性。
 - Fountain 格式解析器目前是用 全大寫 加上 前後空行 當作角色名稱的判斷依據, 如果劇本裡出現全大寫的舞台指示或章節標題, 有可能被誤判成角色, 之後若要處理更複雜的真實劇本, 這段判斷邏輯值得加強。
-- `web_app/app.py` 裡呼叫 LLM 用的是寫死的 `claude-haiku-4-5-20251001`, 未來如果要支援切換模型或多個 LLM 供應商, 需要抽出成設定值, 而不是散落在程式碼裡的字面常數。
+- `web_app/app.py` 的 `call_llm()` 目前用一串 if / elif 分派 anthropic / openai / google 三個供應商, 每多加一家就多一個分支跟一段重複的「讀 Key, 建 client, 呼叫」邏輯, 之後若要再加第四家, 值得改成 dict-of-callables 的 registry 模式, 而不是繼續往同一個函式塞 if。
 - 任何丟進 `run_in_executor` 或背景執行緒的邏輯, 記得對照這次 ffmpeg 的教訓, 全程包好 try/except, 並且確保無論成功或失敗, 都要有辦法讓呼叫端知道結果, 不要讓例外靜靜消失。
 
 ---
@@ -358,11 +372,13 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 ### Web UI
 
 ```powershell
-# 建立 .env, 填入 ANTHROPIC_API_KEY
+# (選用)建立 .env, 依 .env.example 設定 DEFAULT_PROVIDER 與對應的 API Key
 # 啟動 server
 .venv/Scripts/python.exe -m uvicorn web_app.app:app --port 8000
 
 # 瀏覽器開啟 http://localhost:8000
 ```
+
+沒有設定 `.env` 也能正常使用多角色配音, 網頁會自動偵測沒有 API Key, 把「使用 AI 自動配音」勾選框預設關閉, 改用手動指定聲音的方式繼續走完整套流程。
 
 MP3 下載功能需要系統另外安裝 `ffmpeg` 並加入 PATH, 沒有安裝的話, 系統現在會優雅降級成只提供 WAV 下載, 而不會讓整個合成請求卡住。

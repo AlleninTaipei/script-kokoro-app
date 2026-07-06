@@ -325,6 +325,7 @@
     margin-top: 14px;
   }
   .alert-error { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
+  .alert-warning { background: rgba(234,179,8,.1); border: 1px solid rgba(234,179,8,.3); color: var(--yellow); }
 
   .spinner {
     display: inline-block;
@@ -376,6 +377,13 @@
       <button class="mode-btn active" id="modeMulti">🎭 多角色配音</button>
       <button class="mode-btn"        id="modeSingle">📖 單一朗讀</button>
     </div>
+    <div class="ai-toggle-row" id="aiToggleRow" style="display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted);margin-top:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="useAiCheckbox" checked>
+        使用 AI 自動配音（需 API Key）
+      </label>
+    </div>
+    <div class="ai-mode-hint hidden" id="aiModeHint" style="font-size:.78rem;color:var(--yellow);margin-top:4px"></div>
     <div id="uploadError"></div>
     <div class="btn-row">
       <button class="btn btn-primary" id="analyzeBtn" disabled>
@@ -387,6 +395,7 @@
   <!-- ── Step 2: Cast ── -->
   <div class="card hidden" id="castCard">
     <div class="card-title">02 — 角色配音 <span style="color:var(--accent2);font-size:.75rem;text-transform:none;letter-spacing:0">（可調整）</span></div>
+    <div id="castNotice"></div>
     <table class="cast-table">
       <thead>
         <tr>
@@ -472,6 +481,7 @@ let mode        = 'multi';   // 'multi' | 'single'
 let scriptText  = '';
 let analyzeData = null;      // {lines, voice_map, reasons, voice_catalog, characters}
 let parseData   = null;      // {lines, characters, voice_catalog} — single mode
+let serverConfig = { has_api_key: null };
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -488,8 +498,13 @@ const modeSingleBtn = document.getElementById('modeSingle');
 
 const castCard      = document.getElementById('castCard');
 const castBody      = document.getElementById('castBody');
+const castNotice    = document.getElementById('castNotice');
 const synthBtn      = document.getElementById('synthBtn');
 const resetBtn      = document.getElementById('resetBtn');
+
+const aiToggleRow   = document.getElementById('aiToggleRow');
+const useAiCheckbox = document.getElementById('useAiCheckbox');
+const aiModeHint    = document.getElementById('aiModeHint');
 
 const narratorCard       = document.getElementById('narratorCard');
 const narratorVoice      = document.getElementById('narratorVoice');
@@ -528,6 +543,7 @@ function setMode(m) {
   mode = m;
   modeMultiBtn.classList.toggle('active', m === 'multi');
   modeSingleBtn.classList.toggle('active', m === 'single');
+  aiToggleRow.classList.toggle('hidden', m !== 'multi');
   if (scriptText) {
     analyzeBtn.innerHTML = m === 'multi'
       ? '<span>✨</span> 分析劇本並配音'
@@ -537,6 +553,22 @@ function setMode(m) {
 
 modeMultiBtn.addEventListener('click',  () => setMode('multi'));
 modeSingleBtn.addEventListener('click', () => setMode('single'));
+
+// ── Server config (API key detection) ───────────────────────────────────────
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/config');
+    if (res.ok) serverConfig = await res.json();
+  } catch (e) { /* 查詢失敗時維持預設勾選, 不影響功能 */ }
+
+  if (serverConfig.has_api_key === false) {
+    useAiCheckbox.checked = false;
+    aiModeHint.textContent = '尚未偵測到 API Key，已預設為手動指定配音；仍可勾選 AI 選項，但失敗時會自動退回手動分配。';
+    aiModeHint.classList.remove('hidden');
+  }
+}
+loadConfig();
 
 // ── File upload ────────────────────────────────────────────────────────────
 
@@ -602,7 +634,7 @@ analyzeBtn.addEventListener('click', async () => {
     const res = await fetch('/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: scriptText }),
+      body: JSON.stringify({ text: scriptText, use_ai: useAiCheckbox.checked }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -643,7 +675,14 @@ function buildVoiceOptions(catalog) {
 }
 
 function renderCast() {
-  const { characters, voice_map, reasons, voice_catalog } = analyzeData;
+  const { characters, voice_map, reasons, voice_catalog, ai_used, ai_error } = analyzeData;
+
+  if (useAiCheckbox.checked && ai_used === false) {
+    castNotice.innerHTML = `<div class="alert alert-warning">AI 自動配音未成功（${escHtml(ai_error || '原因不明')}），已改用手動輪詢分配，請自行調整下方聲音。</div>`;
+  } else {
+    castNotice.innerHTML = '';
+  }
+
   const optionsHtml = buildVoiceOptions(voice_catalog);
   castBody.innerHTML = characters.map(char => {
     const reason = reasons[char] || '';
@@ -894,6 +933,7 @@ function resetAll() {
   fileName.classList.add('hidden');
   fileName.textContent = '';
   uploadError.innerHTML = '';
+  castNotice.innerHTML = '';
   analyzeBtn.disabled = true;
   analyzeBtn.innerHTML = mode === 'multi'
     ? '<span>✨</span> 分析劇本並配音'
