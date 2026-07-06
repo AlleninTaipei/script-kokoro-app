@@ -418,7 +418,10 @@ async def synthesize(req: SynthesizeRequest):
             final = np.concatenate(all_audio)
             wav_data = to_wav_bytes(final)
             (TEMP_DIR / f"{session_id}.wav").write_bytes(wav_data)
-            (TEMP_DIR / f"{session_id}.mp3").write_bytes(wav_bytes_to_mp3(wav_data))
+            try:
+                (TEMP_DIR / f"{session_id}.mp3").write_bytes(wav_bytes_to_mp3(wav_data))
+            except Exception as e:
+                print(f"MP3 轉檔失敗（將只提供 WAV 下載）：{e}")
             total_dur = round(len(final) / SAMPLE_RATE, 2)
         else:
             total_dur = 0
