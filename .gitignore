@@ -1,0 +1,25 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Secrets
+.env
+
+# Generated audio output
+*.wav
+
+# Exported model files
+*.onnx
+
+# Web UI temp files
+web_app/tmp/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

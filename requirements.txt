@@ -1,0 +1,17 @@
+kokoro
+torch
+numpy
+transformers
+soundfile
+onnx
+onnxruntime
+onnxscript
+sounddevice
+fastapi
+uvicorn
+anthropic
+python-dotenv
+ordered-set
+pypinyin
+cn2an
+jieba

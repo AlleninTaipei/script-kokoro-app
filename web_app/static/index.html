@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kokoro Script TTS</title>
+<style>
+  :root {
+    --bg:      #0f0f17;
+    --surface: #1a1a2e;
+    --card:    #16213e;
+    --border:  #2a2a4a;
+    --accent:  #7c3aed;
+    --accent2: #a855f7;
+    --green:   #22c55e;
+    --red:     #ef4444;
+    --yellow:  #eab308;
+    --text:    #e2e8f0;
+    --muted:   #94a3b8;
+    --radius:  10px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+
+  /* ── layout ── */
+  .container { max-width: 760px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+  }
+  header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -.3px; }
+  header h1 span { color: var(--accent2); }
+
+  .badge {
+    font-size: .72rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: var(--card);
+    cursor: pointer;
+    user-select: none;
+    transition: border-color .2s, color .2s;
+  }
+  .badge:hover { border-color: var(--accent2); color: var(--accent2); }
+  .badge.active-onnx { border-color: var(--green);  color: var(--green); }
+  .badge.active-pt   { border-color: var(--yellow); color: var(--yellow); }
+
+  /* ── card ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .card-title {
+    font-size: .8rem;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  /* ── upload zone ── */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent2);
+    background: rgba(124, 58, 237, .06);
+  }
+  .drop-zone input[type=file] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  }
+  .drop-icon { font-size: 2.2rem; margin-bottom: 10px; }
+  .drop-label { font-size: .95rem; color: var(--muted); }
+  .drop-label strong { color: var(--accent2); }
+  .drop-hint { font-size: .78rem; color: var(--border); margin-top: 6px; }
+  .file-name {
+    margin-top: 14px;
+    font-size: .85rem;
+    color: var(--green);
+    font-weight: 500;
+  }
+
+  /* ── buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 22px;
+    border-radius: var(--radius);
+    font-size: .9rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-primary  { background: var(--accent);  color: #fff; }
+  .btn-primary:hover:not(:disabled)  { background: var(--accent2); }
+  .btn-success  { background: var(--green);   color: #000; }
+  .btn-success:hover:not(:disabled)  { opacity: .85; }
+  .btn-outline  {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-outline:hover:not(:disabled) { border-color: var(--accent2); color: var(--accent2); }
+  .btn-row { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+
+  /* ── mode toggle ── */
+  .mode-toggle {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 18px;
+  }
+  .mode-btn {
+    flex: 1;
+    padding: 9px 0;
+    font-size: .83rem;
+    font-weight: 600;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .mode-btn + .mode-btn { border-left: 1px solid var(--border); }
+  .mode-btn.active { background: var(--accent); color: #fff; }
+  .mode-btn:not(.active):hover { color: var(--text); background: rgba(255,255,255,.04); }
+
+  /* ── narrator card ── */
+  .narrator-pick {
+    padding: 20px;
+    background: var(--surface);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .narrator-pick label {
+    font-size: .8rem;
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  .btn-preview {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-size: .75rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color .15s, color .15s, background .15s;
+    flex-shrink: 0;
+  }
+  .btn-preview:hover { border-color: var(--accent2); color: var(--accent2); }
+  .btn-preview.cached { border-color: var(--green); color: var(--green); }
+  .btn-preview.loading { border-color: var(--yellow); color: var(--yellow); pointer-events: none; }
+  .btn-preview.playing { border-color: var(--accent2); color: var(--accent2); background: rgba(168,85,247,.12); }
+
+  /* ── cast table ── */
+  .cast-table { width: 100%; border-collapse: collapse; }
+  .cast-table th {
+    text-align: left;
+    font-size: .75rem;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cast-table td {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(42,42,74,.6);
+    vertical-align: middle;
+  }
+  .cast-table tr:last-child td { border-bottom: none; }
+
+  .char-name {
+    font-weight: 600;
+    font-size: .95rem;
+    min-width: 100px;
+    padding-right: 16px;
+  }
+  .reason-text {
+    font-size: .78rem;
+    color: var(--muted);
+    padding: 0 16px;
+    max-width: 220px;
+  }
+
+  select.voice-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: .83rem;
+    cursor: pointer;
+    outline: none;
+    min-width: 140px;
+    transition: border-color .2s;
+  }
+  select.voice-select:focus { border-color: var(--accent2); }
+
+  /* ── progress ── */
+  .progress-wrap {
+    background: var(--surface);
+    border-radius: 6px;
+    height: 8px;
+    overflow: hidden;
+    margin: 12px 0 8px;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 6px;
+    transition: width .4s ease;
+    width: 0%;
+  }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: .8rem;
+    color: var(--muted);
+  }
+  .current-line {
+    margin-top: 14px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border-radius: 8px;
+    border-left: 3px solid var(--accent);
+    font-size: .87rem;
+  }
+  .current-line .cl-char {
+    font-weight: 700;
+    color: var(--accent2);
+    margin-right: 8px;
+  }
+  .current-line .cl-voice {
+    font-size: .75rem;
+    color: var(--muted);
+    margin-left: 4px;
+  }
+  .current-line .cl-text {
+    margin-top: 4px;
+    color: var(--text);
+    opacity: .85;
+  }
+
+  .log-list {
+    margin-top: 14px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: .78rem;
+    color: var(--muted);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    scrollbar-width: thin;
+  }
+  .log-list::-webkit-scrollbar { width: 4px; }
+  .log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .log-entry { padding: 3px 0; border-bottom: 1px solid rgba(42,42,74,.4); }
+  .log-entry .ok   { color: var(--green); }
+  .log-entry .rtf  { color: var(--yellow); }
+
+  /* ── result player ── */
+  .player-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  audio {
+    width: 100%;
+    border-radius: 8px;
+    accent-color: var(--accent);
+  }
+  .result-meta {
+    display: flex;
+    gap: 20px;
+    font-size: .82rem;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+  .result-meta span strong { color: var(--text); }
+
+  /* ── util ── */
+  .hidden { display: none !important; }
+
+  .alert {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: .87rem;
+    margin-top: 14px;
+  }
+  .alert-error { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
+
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .step-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .dot-done    { background: var(--green); }
+  .dot-current { background: var(--accent2); animation: pulse 1s infinite; }
+  .dot-pending { background: var(--border); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ── Header ── -->
+  <header>
+    <h1>🎙 Kokoro <span>Script TTS</span></h1>
+    <button class="badge active-onnx" id="backendToggle" title="點擊切換推論引擎">
+      ONNX
+    </button>
+  </header>
+
+  <!-- ── Step 1: Upload ── -->
+  <div class="card" id="uploadCard">
+    <div class="card-title">01 — 上傳劇本</div>
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".txt">
+      <div class="drop-icon">📄</div>
+      <div class="drop-label">
+        <strong>點擊選擇</strong> 或拖曳 .txt 劇本至此
+      </div>
+      <div class="drop-hint">支援 Fountain · 「角色: 台詞」· [角色]台詞[/角色] 格式 · 中英文劇本皆可</div>
+    </div>
+    <div class="file-name hidden" id="fileName"></div>
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="modeMulti">🎭 多角色配音</button>
+      <button class="mode-btn"        id="modeSingle">📖 單一朗讀</button>
+    </div>
+    <div id="uploadError"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="analyzeBtn" disabled>
+        <span>✨</span> 分析劇本並配音
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Step 2: Cast ── -->
+  <div class="card hidden" id="castCard">
+    <div class="card-title">02 — 角色配音 <span style="color:var(--accent2);font-size:.75rem;text-transform:none;letter-spacing:0">（可調整）</span></div>
+    <table class="cast-table">
+      <thead>
+        <tr>
+          <th>角色</th>
+          <th>聲音</th>
+          <th>說明</th>
+        </tr>
+      </thead>
+      <tbody id="castBody"></tbody>
+    </table>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="synthBtn">
+        <span>▶</span> 開始合成
+      </button>
+      <button class="btn btn-outline" id="resetBtn">重新上傳</button>
+    </div>
+  </div>
+
+  <!-- ── Step 2b: Narrator ── -->
+  <div class="card hidden" id="narratorCard">
+    <div class="card-title">02 — 選擇朗讀聲線</div>
+    <div class="narrator-pick">
+      <label>聲線</label>
+      <div style="display:flex;align-items:center;gap:10px">
+        <select class="voice-select" id="narratorVoice" style="min-width:220px"></select>
+        <button class="btn-preview" id="narratorPreviewBtn" title="試聽">▶</button>
+      </div>
+      <div style="font-size:.8rem;color:var(--muted);margin-top:2px">
+        整篇文章將由此聲線完整朗讀
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="narratorSynthBtn">
+        <span>▶</span> 開始合成
+      </button>
+      <button class="btn btn-outline" id="narratorResetBtn">重新上傳</button>
+    </div>
+  </div>
+
+  <!-- ── Step 3: Progress ── -->
+  <div class="card hidden" id="progressCard">
+    <div class="card-title">03 — 合成中</div>
+    <div class="progress-wrap">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div class="progress-label">
+      <span id="progressText">準備中…</span>
+      <span id="progressCount"></span>
+    </div>
+    <div class="current-line hidden" id="currentLine">
+      <span class="cl-char" id="clChar"></span>
+      <span class="cl-voice" id="clVoice"></span>
+      <div class="cl-text" id="clText"></div>
+    </div>
+    <div class="log-list" id="logList"></div>
+  </div>
+
+  <!-- ── Step 4: Result ── -->
+  <div class="card hidden" id="resultCard">
+    <div class="card-title">04 — 完成</div>
+    <div class="player-wrap">
+      <audio controls id="audioPlayer"></audio>
+      <div class="result-meta" id="resultMeta"></div>
+      <div>
+        <a class="btn btn-success" id="downloadWavBtn" download>
+          ⬇ 下載 WAV
+        </a>
+        <a class="btn btn-success" id="downloadMp3Btn" download style="margin-left:10px">
+          ⬇ 下載 MP3
+        </a>
+        <button class="btn btn-outline" id="newBtn" style="margin-left:10px">重新開始</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+
+let backend     = 'onnx';
+let mode        = 'multi';   // 'multi' | 'single'
+let scriptText  = '';
+let analyzeData = null;      // {lines, voice_map, reasons, voice_catalog, characters}
+let parseData   = null;      // {lines, characters, voice_catalog} — single mode
+
+// ── DOM refs ───────────────────────────────────────────────────────────────
+
+const backendToggle = document.getElementById('backendToggle');
+const fileInput     = document.getElementById('fileInput');
+const dropZone      = document.getElementById('dropZone');
+const fileName      = document.getElementById('fileName');
+const uploadError   = document.getElementById('uploadError');
+const analyzeBtn    = document.getElementById('analyzeBtn');
+
+const uploadCard    = document.getElementById('uploadCard');
+const modeMultiBtn  = document.getElementById('modeMulti');
+const modeSingleBtn = document.getElementById('modeSingle');
+
+const castCard      = document.getElementById('castCard');
+const castBody      = document.getElementById('castBody');
+const synthBtn      = document.getElementById('synthBtn');
+const resetBtn      = document.getElementById('resetBtn');
+
+const narratorCard       = document.getElementById('narratorCard');
+const narratorVoice      = document.getElementById('narratorVoice');
+const narratorPreviewBtn = document.getElementById('narratorPreviewBtn');
+const narratorSynthBtn   = document.getElementById('narratorSynthBtn');
+const narratorResetBtn   = document.getElementById('narratorResetBtn');
+
+const progressCard  = document.getElementById('progressCard');
+const progressBar   = document.getElementById('progressBar');
+const progressText  = document.getElementById('progressText');
+const progressCount = document.getElementById('progressCount');
+const currentLine   = document.getElementById('currentLine');
+const clChar        = document.getElementById('clChar');
+const clVoice       = document.getElementById('clVoice');
+const clText        = document.getElementById('clText');
+const logList       = document.getElementById('logList');
+
+const resultCard    = document.getElementById('resultCard');
+const audioPlayer   = document.getElementById('audioPlayer');
+const resultMeta    = document.getElementById('resultMeta');
+const downloadWavBtn = document.getElementById('downloadWavBtn');
+const downloadMp3Btn = document.getElementById('downloadMp3Btn');
+const newBtn        = document.getElementById('newBtn');
+
+// ── Backend toggle ─────────────────────────────────────────────────────────
+
+backendToggle.addEventListener('click', () => {
+  backend = backend === 'onnx' ? 'pytorch' : 'onnx';
+  backendToggle.textContent = backend === 'onnx' ? 'ONNX' : 'PyTorch';
+  backendToggle.className = 'badge ' + (backend === 'onnx' ? 'active-onnx' : 'active-pt');
+});
+
+// ── Mode toggle ────────────────────────────────────────────────────────────
+
+function setMode(m) {
+  mode = m;
+  modeMultiBtn.classList.toggle('active', m === 'multi');
+  modeSingleBtn.classList.toggle('active', m === 'single');
+  if (scriptText) {
+    analyzeBtn.innerHTML = m === 'multi'
+      ? '<span>✨</span> 分析劇本並配音'
+      : '<span>📖</span> 選擇朗讀聲線';
+  }
+}
+
+modeMultiBtn.addEventListener('click',  () => setMode('multi'));
+modeSingleBtn.addEventListener('click', () => setMode('single'));
+
+// ── File upload ────────────────────────────────────────────────────────────
+
+function handleFile(file) {
+  if (!file || !file.name.endsWith('.txt')) {
+    showError(uploadError, '請上傳 .txt 格式的劇本檔案');
+    return;
+  }
+  uploadError.innerHTML = '';
+  const reader = new FileReader();
+  reader.onload = e => {
+    scriptText = e.target.result.trim();
+    if (!scriptText) { showError(uploadError, '檔案內容為空'); return; }
+    fileName.textContent = `📄 ${file.name}  (${(file.size / 1024).toFixed(1)} KB)`;
+    fileName.classList.remove('hidden');
+    analyzeBtn.disabled = false;
+    analyzeBtn.innerHTML = mode === 'multi'
+      ? '<span>✨</span> 分析劇本並配音'
+      : '<span>📖</span> 選擇朗讀聲線';
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  handleFile(e.dataTransfer.files[0]);
+});
+
+// ── Analyze ────────────────────────────────────────────────────────────────
+
+analyzeBtn.addEventListener('click', async () => {
+  analyzeBtn.disabled = true;
+  uploadError.innerHTML = '';
+
+  if (mode === 'single') {
+    analyzeBtn.innerHTML = '<span class="spinner"></span> 解析中…';
+    try {
+      const res = await fetch('/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: scriptText }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || '解析失敗'); }
+      parseData = await res.json();
+      renderNarrator();
+      uploadCard.classList.add('hidden');
+      narratorCard.classList.remove('hidden');
+    } catch (e) {
+      showError(uploadError, e.message);
+      analyzeBtn.disabled = false;
+      analyzeBtn.innerHTML = '<span>📖</span> 選擇朗讀聲線';
+    }
+    return;
+  }
+
+  analyzeBtn.innerHTML = '<span class="spinner"></span> 分析中…';
+  try {
+    const res = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: scriptText }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || '分析失敗');
+    }
+    analyzeData = await res.json();
+    renderCast();
+    uploadCard.classList.add('hidden');
+    castCard.classList.remove('hidden');
+  } catch (e) {
+    showError(uploadError, e.message);
+    analyzeBtn.disabled = false;
+    analyzeBtn.innerHTML = '<span>✨</span> 分析劇本並配音';
+  }
+});
+
+// ── Render cast table ──────────────────────────────────────────────────────
+
+function buildVoiceOptions(catalog) {
+  // Group voices
+  const groups = {};
+  for (const [vid, desc] of Object.entries(catalog)) {
+    const g = vid.startsWith('z') ? 'Mandarin Chinese'
+            : vid.startsWith('b') ? 'British English'
+            : 'American English';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push({ vid, desc });
+  }
+  let html = '';
+  for (const [gname, voices] of Object.entries(groups)) {
+    html += `<optgroup label="${gname}">`;
+    for (const { vid, desc } of voices) {
+      html += `<option value="${vid}">${vid} — ${desc}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  return html;
+}
+
+function renderCast() {
+  const { characters, voice_map, reasons, voice_catalog } = analyzeData;
+  const optionsHtml = buildVoiceOptions(voice_catalog);
+  castBody.innerHTML = characters.map(char => {
+    const reason = reasons[char] || '';
+    return `<tr>
+      <td class="char-name">${escHtml(char)}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select class="voice-select" data-char="${escHtml(char)}">
+            ${optionsHtml}
+          </select>
+          <button class="btn-preview" title="試聽此聲線" onclick="previewVoice(this)">▶</button>
+        </div>
+      </td>
+      <td class="reason-text">${escHtml(reason)}</td>
+    </tr>`;
+  }).join('');
+
+  // Set selected values; reset preview state when dropdown changes
+  castBody.querySelectorAll('select').forEach(sel => {
+    const char = sel.dataset.char;
+    const v = voice_map[char];
+    if (v) sel.value = v;
+    sel.addEventListener('change', () => {
+      const btn = sel.closest('td').querySelector('.btn-preview');
+      btn.className = 'btn-preview';
+      btn.textContent = '▶';
+    });
+  });
+}
+
+// ── Narrator card ─────────────────────────────────────────────────────────
+
+function renderNarrator() {
+  narratorVoice.innerHTML = buildVoiceOptions(parseData.voice_catalog);
+  narratorVoice.value = 'af_heart';
+  narratorPreviewBtn.className = 'btn-preview';
+  narratorPreviewBtn.textContent = '▶';
+  narratorVoice.addEventListener('change', () => {
+    narratorPreviewBtn.className = 'btn-preview';
+    narratorPreviewBtn.textContent = '▶';
+  });
+}
+
+narratorPreviewBtn.addEventListener('click', () => {
+  previewVoiceById(narratorVoice.value, narratorPreviewBtn);
+});
+
+narratorSynthBtn.addEventListener('click', async () => {
+  const voice = narratorVoice.value;
+  const voice_map = Object.fromEntries(
+    parseData.characters.map(c => [c, voice])
+  );
+  narratorSynthBtn.disabled = true;
+  narratorSynthBtn.innerHTML = '<span class="spinner"></span> 合成中…';
+  narratorCard.classList.add('hidden');
+  await startSynthesis(parseData.lines, voice_map);
+});
+
+narratorResetBtn.addEventListener('click', resetAll);
+
+function getVoiceMap() {
+  const map = {};
+  castBody.querySelectorAll('select').forEach(sel => {
+    map[sel.dataset.char] = sel.value;
+  });
+  return map;
+}
+
+// ── Voice preview ─────────────────────────────────────────────────────────
+
+const previewCache = new Map();   // voice_id → blob URL
+let   previewAudio = null;        // currently playing Audio object
+
+async function previewVoice(btn) {
+  const sel     = btn.closest('td').querySelector('select');
+  const voiceId = sel.value;
+
+  // Stop any currently playing preview
+  if (previewAudio) { previewAudio.pause(); previewAudio = null; }
+
+  // Already cached — play immediately
+  if (previewCache.has(voiceId)) {
+    playPreview(btn, voiceId, previewCache.get(voiceId));
+    return;
+  }
+
+  // Fetch from server
+  btn.className   = 'btn-preview loading';
+  btn.innerHTML   = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>';
+
+  try {
+    const res = await fetch(`/preview/${encodeURIComponent(voiceId)}`);
+    if (!res.ok) throw new Error(await res.text());
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    previewCache.set(voiceId, url);
+    playPreview(btn, voiceId, url);
+  } catch (e) {
+    btn.className = 'btn-preview';
+    btn.textContent = '▶';
+    console.error('Preview failed:', e);
+  }
+}
+
+function playPreview(btn, voiceId, url) {
+  const audio = new Audio(url);
+  previewAudio = audio;
+
+  btn.className   = 'btn-preview playing';
+  btn.textContent = '■';
+
+  // Click again while playing → stop
+  const stopFn = () => { audio.pause(); };
+  btn.addEventListener('click', stopFn, { once: true });
+
+  audio.addEventListener('ended', () => {
+    btn.className   = 'btn-preview cached';
+    btn.textContent = '▶';
+    btn.removeEventListener('click', stopFn);
+    previewAudio = null;
+  });
+  audio.addEventListener('pause', () => {
+    btn.className   = 'btn-preview cached';
+    btn.textContent = '▶';
+    previewAudio = null;
+  });
+
+  audio.play();
+}
+
+// ── Synthesize ────────────────────────────────────────────────────────────
+
+synthBtn.addEventListener('click', async () => {
+  synthBtn.disabled = true;
+  synthBtn.innerHTML = '<span class="spinner"></span> 合成中…';
+  castCard.classList.add('hidden');
+  await startSynthesis(analyzeData.lines, getVoiceMap());
+});
+
+async function startSynthesis(lines, voice_map) {
+  progressCard.classList.remove('hidden');
+  logList.innerHTML = '';
+  progressBar.style.width = '0%';
+  progressText.textContent = '初始化引擎…';
+  progressCount.textContent = '';
+
+  try {
+    const res = await fetch('/synthesize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines, voice_map, backend }),
+    });
+
+    if (!res.ok) throw new Error('合成請求失敗');
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const chunks = buf.split('\n\n');
+      buf = chunks.pop();
+      for (const chunk of chunks) {
+        if (!chunk.startsWith('data: ')) continue;
+        try { handleSSE(JSON.parse(chunk.slice(6))); } catch {}
+      }
+    }
+  } catch (e) {
+    progressText.textContent = '❌ ' + e.message;
+    synthBtn.disabled = false;
+    synthBtn.innerHTML = '<span>▶</span> 開始合成';
+    narratorSynthBtn.disabled = false;
+    narratorSynthBtn.innerHTML = '<span>▶</span> 開始合成';
+  }
+}
+
+function handleSSE(ev) {
+  if (ev.type === 'start') {
+    progressText.textContent = `使用 ${ev.backend.toUpperCase()} 引擎，共 ${ev.total} 句`;
+    progressCount.textContent = `0 / ${ev.total}`;
+  }
+  else if (ev.type === 'processing') {
+    currentLine.classList.remove('hidden');
+    clChar.textContent  = ev.char;
+    clVoice.textContent = `(${ev.voice})`;
+    clText.textContent  = ev.text;
+  }
+  else if (ev.type === 'line') {
+    const pct = Math.round((ev.index / ev.total) * 100);
+    progressBar.style.width = pct + '%';
+    progressCount.textContent = `${ev.index} / ${ev.total}`;
+    progressText.textContent = `合成中…`;
+
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    const rtfColor = ev.rtf < 1.5 ? 'ok' : ev.rtf < 4 ? 'rtf' : '';
+    entry.innerHTML =
+      `<span class="ok">[${String(ev.index).padStart(2,'0')}]</span> ` +
+      `<strong>${escHtml(ev.char)}</strong> ` +
+      `<span style="color:var(--accent2)">${ev.voice}</span>  ` +
+      `${ev.duration}s  <span class="${rtfColor}">RTF ${ev.rtf}x</span>  ` +
+      `— ${escHtml(ev.text.substring(0, 50))}`;
+    logList.prepend(entry);
+  }
+  else if (ev.type === 'done') {
+    progressBar.style.width = '100%';
+    progressText.textContent = '✅ 合成完成';
+    currentLine.classList.add('hidden');
+
+    const sid = ev.session_id;
+    audioPlayer.src = `/download/${sid}?format=wav`;
+    downloadWavBtn.href = `/download/${sid}?format=wav`;
+    downloadWavBtn.download = `kokoro_${sid}.wav`;
+    downloadMp3Btn.href = `/download/${sid}?format=mp3`;
+    downloadMp3Btn.download = `kokoro_${sid}.mp3`;
+
+    const mins  = Math.floor(ev.total_duration / 60);
+    const secs  = (ev.total_duration % 60).toFixed(1);
+    resultMeta.innerHTML =
+      `<span>🎵 音訊長度：<strong>${mins > 0 ? mins + 'm ' : ''}${secs}s</strong></span>` +
+      `<span>🔧 引擎：<strong>${backend.toUpperCase()}</strong></span>`;
+
+    setTimeout(() => {
+      progressCard.classList.add('hidden');
+      resultCard.classList.remove('hidden');
+    }, 600);
+  }
+  else if (ev.type === 'error') {
+    progressText.textContent = '❌ ' + ev.message;
+    synthBtn.disabled = false;
+    synthBtn.innerHTML = '<span>▶</span> 開始合成';
+  }
+}
+
+// ── Reset / new ────────────────────────────────────────────────────────────
+
+resetBtn.addEventListener('click', resetAll);
+newBtn.addEventListener('click', resetAll);
+
+function resetAll() {
+  scriptText  = '';
+  analyzeData = null;
+  parseData   = null;
+  fileInput.value = '';
+  fileName.classList.add('hidden');
+  fileName.textContent = '';
+  uploadError.innerHTML = '';
+  analyzeBtn.disabled = true;
+  analyzeBtn.innerHTML = mode === 'multi'
+    ? '<span>✨</span> 分析劇本並配音'
+    : '<span>📖</span> 選擇朗讀聲線';
+  synthBtn.disabled = false;
+  synthBtn.innerHTML = '<span>▶</span> 開始合成';
+  narratorSynthBtn.disabled = false;
+  narratorSynthBtn.innerHTML = '<span>▶</span> 開始合成';
+  audioPlayer.src = '';
+  logList.innerHTML = '';
+
+  castCard.classList.add('hidden');
+  narratorCard.classList.add('hidden');
+  progressCard.classList.add('hidden');
+  resultCard.classList.add('hidden');
+  uploadCard.classList.remove('hidden');
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showError(el, msg) {
+  el.innerHTML = `<div class="alert alert-error">⚠️ ${escHtml(msg)}</div>`;
+}
+</script>
+</body>
+</html>
