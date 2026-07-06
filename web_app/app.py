@@ -32,7 +32,13 @@ ROOT = Path(__file__).parent.parent   # repo root
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
-import anthropic
+DEFAULT_PROVIDER = os.environ.get("DEFAULT_PROVIDER", "anthropic").strip().lower()
+
+PROVIDER_DEFAULT_MODELS = {
+    "anthropic": "claude-haiku-4-5-20251001",
+    "openai":    "gpt-4o-mini",
+    "google":    "gemini-2.0-flash",
+}
 
 ONNX_FILE  = ROOT / "kokoro.onnx"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -291,6 +297,44 @@ async def index():
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
+# ── LLM 供應商分派 ───────────────────────────────────────────────────────────
+
+def call_llm(prompt: str, provider: str = "") -> str:
+    """依 DEFAULT_PROVIDER(或指定的 provider)呼叫對應的雲端 LLM, 回傳純文字回應。"""
+    provider = (provider or DEFAULT_PROVIDER).strip().lower()
+
+    if provider == "openai":
+        import openai
+        model = os.environ.get("OPENAI_MODEL") or PROVIDER_DEFAULT_MODELS["openai"]
+        client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        resp = client.chat.completions.create(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content.strip()
+
+    if provider == "google":
+        from google import genai
+        model_name = os.environ.get("GOOGLE_MODEL") or PROVIDER_DEFAULT_MODELS["google"]
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        resp = client.models.generate_content(model=model_name, contents=prompt)
+        return resp.text.strip()
+
+    if provider != "anthropic":
+        raise ValueError(f"未知的 DEFAULT_PROVIDER：{provider!r}（可用值：anthropic / openai / google）")
+
+    import anthropic
+    model = os.environ.get("ANTHROPIC_MODEL") or PROVIDER_DEFAULT_MODELS["anthropic"]
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    msg = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return msg.content[0].text.strip()
+
+
 # ── /analyze + /parse ────────────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
@@ -321,24 +365,15 @@ async def analyze(req: AnalyzeRequest):
         for vid, info in VOICE_CATALOG.items()
     )
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        messages=[{
-            "role": "user",
-            "content": (
-                "你是 TTS 配音導演。根據角色台詞的語言、性別、年齡、語氣，"
-                "從以下聲音列表中為每個角色選出最合適的聲音。\n\n"
-                f"可用聲音：\n{voice_block}\n\n"
-                f"角色台詞範例：\n{sample_block}\n\n"
-                "回傳純 JSON（不含 markdown），格式如下：\n"
-                '{"mapping": {"角色名": "voice_id"}, "reasons": {"角色名": "一句理由"}}'
-            ),
-        }],
+    prompt = (
+        "你是 TTS 配音導演。根據角色台詞的語言、性別、年齡、語氣，"
+        "從以下聲音列表中為每個角色選出最合適的聲音。\n\n"
+        f"可用聲音：\n{voice_block}\n\n"
+        f"角色台詞範例：\n{sample_block}\n\n"
+        "回傳純 JSON（不含 markdown），格式如下：\n"
+        '{"mapping": {"角色名": "voice_id"}, "reasons": {"角色名": "一句理由"}}'
     )
-
-    raw = msg.content[0].text.strip()
+    raw = call_llm(prompt).strip()
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
 
     try:

@@ -10,6 +10,8 @@ sounddevice
 fastapi
 uvicorn
 anthropic
+openai
+google-genai
 python-dotenv
 ordered-set
 pypinyin
